@@ -26,7 +26,7 @@ train.init_checkpoint = "pretrained_models/yolox/yolox_x.pth"
 
 # datasets
 DATASETS.TRAIN = ["itodd_pbr_train"]
-DATASETS.TEST = ["itodd_bop_test"]
+DATASETS.TEST = ["itodd_val"]
 
 dataloader.train.dataset.lst.names = DATASETS.TRAIN
 dataloader.train.total_batch_size = 32

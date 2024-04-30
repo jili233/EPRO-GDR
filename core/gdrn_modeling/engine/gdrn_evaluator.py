@@ -32,6 +32,13 @@ from lib.vis_utils.image import grid_show, vis_image_bboxes_cv2, vis_image_mask_
 from .engine_utils import batch_data, get_out_coor, get_out_mask, batch_data_inference_roi
 from .test_utils import eval_cached_results, save_and_eval_results, to_list
 
+from scipy.spatial.transform import Rotation as R
+from core.gdrn_modeling.epropnp.lib.ops.pnp.epropnp import EProPnP6DoF
+from core.gdrn_modeling.epropnp.lib.ops.pnp.camera import PerspectiveCamera
+from core.gdrn_modeling.epropnp.lib.ops.pnp.levenberg_marquardt import LMSolver, RSLMSolver
+from core.gdrn_modeling.epropnp.lib.ops.pnp.cost_fun import AdaptiveHuberPnPCost
+from scipy.spatial.transform import Rotation as R
+
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +178,8 @@ class GDRN_Evaluator(DatasetEvaluator):
             elif cfg.TEST.PNP_TYPE.lower() == "net_ransac_pnp_rot":
                 # use rot from PnP/RANSAC and translation from Net
                 return self.process_net_and_pnp(inputs, outputs, out_dict, pnp_type="ransac_rot")
+            elif cfg.TEST.PNP_TYPE.lower() == "epropnp":
+                return self.process_net_and_pnp(inputs, outputs, out_dict, pnp_type="epropnp")
             else:
                 raise NotImplementedError
 
@@ -238,7 +247,7 @@ class GDRN_Evaluator(DatasetEvaluator):
                 item["time"] = output["time"]
             self._predictions.extend(json_results)
 
-    def process_net_and_pnp(self, inputs, outputs, out_dict, pnp_type="iter"):
+    def process_net_and_pnp(self, inputs, outputs, out_dict, pnp_type):
         """Initialize with network prediction (learned PnP) + iter PnP
         Args:
             inputs: the inputs to a model.
@@ -260,6 +269,10 @@ class GDRN_Evaluator(DatasetEvaluator):
         out_rots = out_dict["rot"].detach().to(self._cpu_device).numpy()
         out_transes = out_dict["trans"].detach().to(self._cpu_device).numpy()
 
+        x2d = out_dict["x2d"].detach().to(self._cpu_device).numpy()
+        w2d = out_dict["w2d"].detach().to(self._cpu_device).numpy()
+        x3d = out_dict["x3d"].detach().to(self._cpu_device).numpy()
+
         out_i = -1
         for i, (_input, output) in enumerate(zip(inputs, outputs)):
             start_process_time = time.perf_counter()
@@ -273,6 +286,8 @@ class GDRN_Evaluator(DatasetEvaluator):
                 coord_2d_i = _input["roi_coord_2d"][inst_i].cpu().numpy().transpose(1, 2, 0)  # CHW->HWC
                 im_H = _input["im_H"][inst_i].item()
                 im_W = _input["im_W"][inst_i].item()
+                bbox_center = _input["bbox_center"][inst_i].cpu().numpy()
+                resize_ratio = _input["resize_ratio"][inst_i].item()
 
                 scene_im_id_split = _input["scene_im_id"][inst_i].split("/")
                 K = _input["cam"][inst_i].cpu().numpy().copy()
@@ -292,14 +307,15 @@ class GDRN_Evaluator(DatasetEvaluator):
                 xyz_i = out_xyz[out_i].transpose(1, 2, 0)
                 mask_i = np.squeeze(out_mask[out_i])
 
+
                 img_points, model_points = self.get_img_model_points_with_coords2d(
-                    mask_i,
-                    xyz_i,
-                    coord_2d_i,
-                    im_H=im_H,
-                    im_W=im_W,
-                    extent=_input["roi_extent"][inst_i].cpu().numpy(),
-                    mask_thr=cfg.MODEL.POSE_NET.GEO_HEAD.MASK_THR_TEST,
+                mask_i,
+                xyz_i,
+                coord_2d_i,
+                im_H=im_H,
+                im_W=im_W,
+                extent=_input["roi_extent"][inst_i].cpu().numpy(),
+                mask_thr=cfg.MODEL.POSE_NET.GEO_HEAD.MASK_THR_TEST,
                 )
 
                 rot_est_net = out_rots[out_i]
@@ -329,6 +345,7 @@ class GDRN_Evaluator(DatasetEvaluator):
                             reprojectionError=3.0,  # default 8.0
                             iterationsCount=20,
                         )
+                        
                     else:  # iter PnP
                         # points_3d = np.expand_dims(points_3d, 0)  # uncomment for EPNP
                         # points_2d = np.expand_dims(points_2d, 0)
@@ -369,6 +386,7 @@ class GDRN_Evaluator(DatasetEvaluator):
             for item in json_results:
                 item["time"] = output["time"]
             self._predictions.extend(json_results)
+
 
     def process_pnp_ransac(self, inputs, outputs, out_dict):
         """
@@ -512,7 +530,7 @@ class GDRN_Evaluator(DatasetEvaluator):
                 rot_est = out_rots[out_i]
                 trans_est = out_transes[out_i]
                 pose_est = np.hstack([rot_est, trans_est.reshape(3, 1)])
-                depth_sensor_crop = cv2.resize(_input['roi_depth'][inst_i][-1].cpu().numpy().copy().squeeze(), (self.out_res, self.out_res))
+                depth_sensor_crop = cv2.resize(_input['roi_depth'][inst_i][-1].cpu().numpy().copy().squeeze(), (cfg.MODEL.POSE_NET.OUTPUT_RES, cfg.MODEL.POSE_NET.OUTPUT_RES))
                 depth_sensor_mask_crop = depth_sensor_crop > 0
 
                 net_cfg = cfg.MODEL.POSE_NET

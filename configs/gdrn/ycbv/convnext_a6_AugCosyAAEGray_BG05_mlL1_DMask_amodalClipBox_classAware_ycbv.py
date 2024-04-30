@@ -32,7 +32,7 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=48,
+    IMS_PER_BATCH=72,
     TOTAL_EPOCHS=40,  # 10
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
@@ -40,12 +40,12 @@ SOLVER = dict(
     OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=8e-4, weight_decay=0.01),
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
-    WARMUP_ITERS=1000,
+    WARMUP_ITERS=400,
 )
 
 DATASETS = dict(
-    TRAIN=("ycbv_train_real", "ycbv_train_pbr"),
-    TEST=("ycbv_test",),
+    #TRAIN=("ycbv_train_pbr",),
+    TEST=("ycbv_bop_test",),
     DET_FILES_TEST=("datasets/BOP_DATASETS/ycbv/test/test_bboxes/yolox_x_640_ycbv_real_pbr_ycbv_bop_test.json",),
     SYM_OBJS=[
         "024_bowl",
@@ -58,11 +58,12 @@ DATASETS = dict(
 
 DATALOADER = dict(
     # Number of data loading threads
-    NUM_WORKERS=8,
+    NUM_WORKERS=48,
     FILTER_VISIB_THR=0.3,
 )
 
 MODEL = dict(
+    WEIGHTS="output/gdrn/ycbv/convnext_a6_AugCosyAAEGray_BG05_mlL1_DMask_amodalClipBox_classAware_ycbv/model_final_wo_optim.pth",
     LOAD_DETS_TEST=True,
     PIXEL_MEAN=[0.0, 0.0, 0.0],
     PIXEL_STD=[255.0, 255.0, 255.0],
@@ -75,7 +76,7 @@ MODEL = dict(
             FREEZE=False,
             PRETRAINED="timm",
             INIT_CFG=dict(
-                type="timm/convnext_base",
+                type="convnext_base.fb_in22k_ft_in1k",   # convnext_base.fb_in22k_ft_in1k | convnextv2_base.fcmae_ft_in1k
                 pretrained=True,
                 in_chans=3,
                 features_only=True,
@@ -85,6 +86,7 @@ MODEL = dict(
         ## geo head: Mask, XYZ, Region
         GEO_HEAD=dict(
             FREEZE=False,
+            LR_MULT_NEW_HEADS=1.0,
             INIT_CFG=dict(
                 type="TopDownDoubleMaskXyzRegionHead",
                 in_dim=1024,  # this is num out channels of backbone conv feature
@@ -100,6 +102,8 @@ MODEL = dict(
             WITH_2D_COORD=True,
             ROT_TYPE="allo_rot6d",
             TRANS_TYPE="centroid_z",
+            NUM_POINTS=1024, # 512 | 1024 | 2048 | 4096
+            INIT_THRESHOLD=0.90,
         ),
         LOSS_CFG=dict(
             # xyz loss ----------------------------
@@ -116,17 +120,22 @@ MODEL = dict(
             # region loss -------------------------
             REGION_LOSS_TYPE="CE",  # CE
             REGION_LOSS_MASK_GT="visib",  # trunc | visib | obj
-            REGION_LW=1.0,
+            REGION_LW=0.005,
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM
             PM_LW=1.0,
+            # rot loss ----------------------------
+            ROT_LOSS_TYPE="angular",  # angular | L2
+            ROT_LW=1.0,
             # centroid loss -------
             CENTROID_LOSS_TYPE="L1",
             CENTROID_LW=1.0,
             # z loss -----------
             Z_LOSS_TYPE="L1",
             Z_LW=1.0,
+            # monte carlo loss ------------
+            MC_LW = 0.2,
         ),
     ),
 )
@@ -140,4 +149,20 @@ VAL = dict(
     USE_BOP=True,  # whether to use bop toolkit
 )
 
-TEST = dict(EVAL_PERIOD=0, VIS=False, TEST_BBOX_TYPE="est")  # gt | est
+TEST = dict(
+    USE_W2D_MASK=True,
+    USE_PRED_VIS_MASK=False,
+    EVAL_PERIOD=0, 
+    VIS=False, 
+    TEST_BBOX_TYPE="est",   # gt | est
+    USE_PNP=False,
+    PNP_TYPE="ransac_pnp",
+    SAVE_RESULTS_ONLY=False,
+    USE_DEPTH_REFINE=False,
+    DEPTH_REFINE_ITER=2,
+    DEPTH_REFINE_THRESHOLD=0.6,
+    USE_COOR_Z_REFINE=False,
+)
+
+#EXP_ID = 'convnext_a6_AugCosyAAEGray_BG05_mlL1_DMask_amodalClipBox_classAware_lmo'
+#RESUME = True

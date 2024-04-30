@@ -4,6 +4,7 @@ from mmcv.cnn import normal_init, constant_init
 from lib.torch_utils.layers.layer_utils import get_norm, get_nn_act_func
 from lib.torch_utils.layers.conv_module import ConvModule
 from lib.torch_utils.layers.std_conv_transpose import StdConvTranspose2d
+import torch
 
 
 class TopDownDoubleMaskXyzRegionHead(nn.Module):
@@ -27,6 +28,7 @@ class TopDownDoubleMaskXyzRegionHead(nn.Module):
         region_num_classes=1,
         mask_out_dim=2,
         xyz_out_dim=3,
+        w2d_out_dim=2,
         region_out_dim=65,  # 64+1
     ):
         """
@@ -114,6 +116,21 @@ class TopDownDoubleMaskXyzRegionHead(nn.Module):
         self.mask_out_dim = mask_out_dim
         self.xyz_out_dim = xyz_out_dim
         self.region_out_dim = region_out_dim
+        self.w2d_out_dim = w2d_out_dim
+        self.scale_branch = nn.Linear(feat_dim, 2)
+        nn.init.constant_(self.scale_branch.weight, 0)
+        nn.init.constant_(self.scale_branch.bias, 3.0)
+
+        self.w2d_out_layer = nn.Conv2d(
+            feat_dim,
+            2,
+            kernel_size=1,
+            padding=0,
+            bias=True,
+        )
+
+        nn.init.normal_(self.w2d_out_layer.weight, std=0.01)
+        nn.init.constant_(self.w2d_out_layer.bias, 0)
 
         if self.out_layer_shared:
             out_dim = (
@@ -187,14 +204,16 @@ class TopDownDoubleMaskXyzRegionHead(nn.Module):
 
             xyz_dim = self.xyz_out_dim * self.xyz_num_classes
             xyz = out[:, mask_dim : mask_dim + xyz_dim, :, :]
-
+            
             region = out[:, mask_dim + xyz_dim :, :, :]
+            w2d = self.w2d_out_layer(x)
 
             bs, c, h, w = xyz.shape
             xyz = xyz.view(bs, 3, xyz_dim // 3, h, w)
             coor_x = xyz[:, 0, :, :, :]
             coor_y = xyz[:, 1, :, :, :]
             coor_z = xyz[:, 2, :, :, :]
+            scale = self.scale_branch(x.flatten(2).mean(dim=-1)).exp()
 
         else:
             vis_mask = self.vis_mask_out_layer(x)
@@ -208,7 +227,8 @@ class TopDownDoubleMaskXyzRegionHead(nn.Module):
             coor_z = xyz[:, 2, :, :, :]
 
             region = self.region_out_layer(x)
-        return vis_mask, full_mask, coor_x, coor_y, coor_z, region
+
+        return vis_mask, full_mask, coor_x, coor_y, coor_z, region, w2d, scale
 
 
 def _get_deconv_pad_outpad(deconv_kernel):

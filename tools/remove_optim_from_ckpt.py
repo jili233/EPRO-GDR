@@ -25,8 +25,10 @@ def main():
 
     args = parser.parse_args()
 
-    ckpt = torch.load(args.model)
+    # ckpt = torch.load(args.model)
+    ckpt = torch.load(args.model, map_location='cpu')
     model = ckpt["model"]
+
     # del model["optimizer"]
     # del model["scheduler"]
     # del model["iteration"]

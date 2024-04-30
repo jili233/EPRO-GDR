@@ -29,7 +29,7 @@ from .pose_from_pred import pose_from_pred
 from .pose_from_pred_centroid_z import pose_from_pred_centroid_z
 from .pose_from_pred_centroid_z_abs import pose_from_pred_centroid_z_abs
 from .net_factory import BACKBONES
-from core.utils.my_checkpoint import load_timm_pretrained
+#from core.utils.my_checkpoint import load_timm_pretrained
 
 logger = logging.getLogger(__name__)
 

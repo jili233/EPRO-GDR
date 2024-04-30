@@ -26,7 +26,9 @@ train.init_checkpoint = "pretrained_models/yolox/yolox_x.pth"
 
 # datasets
 DATASETS.TRAIN = ["hb_pbr_train"]
-DATASETS.TEST = ["hb_test_primesense_bop19"]
+DATASETS.TEST = ["hb_val_primesense_all"]
+
+# hb_test_primesense_bop19
 
 dataloader.train.dataset.lst.names = DATASETS.TRAIN
 dataloader.train.total_batch_size = 32

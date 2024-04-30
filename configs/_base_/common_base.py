@@ -71,7 +71,7 @@ DATASETS = dict(
     TRAIN=(),
     TRAIN2=(),  # the second training dataset, useful for data balancing
     TRAIN2_RATIO=0.0,
-    DATA_LEN_WITH_TRAIN2=True,
+    DATA_LEN_WITH_TRAIN2=False,
     # List of the pre-computed proposal files for training, which must be consistent
     # with datasets listed in DATASETS.TRAIN.
     PROPOSAL_FILES_TRAIN=(),
@@ -150,7 +150,7 @@ SOLVER = dict(
     POLY_POWER=0.9,  # poly power
     REL_STEPS=(0.5, 0.75),
     # checkpoint ------------------------------------------------
-    CHECKPOINT_PERIOD=5,
+    CHECKPOINT_PERIOD=2,
     CHECKPOINT_BY_EPOCH=True,
     MAX_TO_KEEP=5,
     # Gradient clipping -----------------------------------------
@@ -179,7 +179,7 @@ SOLVER = dict(
 # Specific train options
 # ---------------------------------------------------------------------------- #
 TRAIN = dict(
-    PRINT_FREQ=100,
+    PRINT_FREQ=1,
     VERBOSE=False,
     VIS=False,
     # vis imgs in tensorboard

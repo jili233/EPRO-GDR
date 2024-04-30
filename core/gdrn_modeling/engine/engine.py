@@ -9,6 +9,11 @@ import time
 import cv2
 import numpy as np
 from collections import OrderedDict
+from core.gdrn_modeling.engine.engine_utils import vis_batch
+
+import matplotlib.pyplot as plt
+import os
+import time
 
 from detectron2.utils.events import EventStorage
 from detectron2.checkpoint import PeriodicCheckpointer
@@ -44,6 +49,7 @@ from .engine_utils import batch_data, get_out_coor, get_out_mask
 from .gdrn_evaluator import gdrn_inference_on_dataset, GDRN_Evaluator, gdrn_save_result_of_dataset
 from .gdrn_custom_evaluator import GDRN_EvaluatorCustom
 import ref
+import multiprocessing
 
 
 logger = logging.getLogger(__name__)
@@ -312,6 +318,7 @@ class GDRN_Lite(LightningLite):
                     roi_extents=batch.get("roi_extent", None),
                     do_loss=True,
                 )
+                
                 losses = sum(loss_dict.values())
                 assert torch.isfinite(losses).all(), loss_dict
 
@@ -405,11 +412,11 @@ class GDRN_Lite(LightningLite):
 
 def vis_train_data(data, obj_names, cfg):
     for i, d in enumerate(data):
-        # if i >= 1:
-        #     continue
+        if i >= 1:
+            continue
         full_img = mmcv.imread(d["file_name"], "color")
-        # if "000009/rgb/000047.png" not in d["file_name"]:
-        #     continue
+        if "000009/rgb/000047.png" not in d["file_name"]:
+            continue
         print(d["file_name"])
         im_H, im_W = full_img.shape[:2]
         roi_cls = d["roi_cls"]

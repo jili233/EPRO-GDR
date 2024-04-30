@@ -187,7 +187,7 @@ class LM_PBR_Dataset:
                         self.xyz_root,
                         f"{scene_id:06d}/{int_im_id:06d}_{anno_i:06d}-xyz.pkl",
                     )
-                    assert osp.exists(xyz_path), xyz_path
+                    #assert osp.exists(xyz_path), xyz_path
                     inst = {
                         "category_id": cur_label,  # 0-based label
                         "bbox": bbox_visib,
@@ -556,4 +556,4 @@ if __name__ == "__main__":
     register_with_name_cfg(sys.argv[1])
     print("dataset catalog: ", DatasetCatalog.list())
 
-    test_vis()
+    #test_vis()

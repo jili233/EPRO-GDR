@@ -227,5 +227,5 @@ def allo_to_ego_mat_torch(translation, rot_allo, eps=1e-4):
     )
     rot_allo_to_ego = quat2mat_torch(q_allo_to_ego)
     # Apply quaternion for transformation from allocentric to egocentric.
-    rot_ego = torch.matmul(rot_allo_to_ego, rot_allo)
+    rot_ego = torch.matmul(rot_allo_to_ego.float(), rot_allo.float())
     return rot_ego

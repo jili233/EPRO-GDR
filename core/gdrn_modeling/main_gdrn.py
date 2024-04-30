@@ -46,12 +46,14 @@ from core.gdrn_modeling.models import (
     GDRN_double_mask,
     GDRN_Dstream_double_mask,
 )  # noqa
+import time
 
 
 logger = logging.getLogger("detectron2")
 
 
 def setup(args):
+    print("Entering setup function")
     """Create configs and perform basic setups."""
     cfg = Config.fromfile(args.config_file)
     if args.opts is not None:
@@ -160,10 +162,21 @@ class Lite(GDRN_Lite):
 
         # don't forget to call `setup` to prepare for model / optimizer for distributed training.
         # the model is moved automatically to the right device.
+        logger.info("Before setup")
+        if optimizer is None:
+            logger.info("Optimizer is None")
+        else:
+            logger.info("Optimizer is not None")
+
         if optimizer is not None:
             model, optimizer = self.setup(model, optimizer)
         else:
             model = self.setup(model)
+        logger.info("After setup")
+
+        logger.info("Calculating model parameters")
+        params = sum(p.numel() for p in model.parameters()) / 1e6
+        logger.info("{}M params".format(params))
 
         if True:
             # sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -186,7 +199,7 @@ class Lite(GDRN_Lite):
         if hard_limit < FILE_LIMIT:
             logger.warning("set sharing strategy for multiprocessing to file_system")
             torch.multiprocessing.set_sharing_strategy("file_system")
-        return self.do_test(cfg, model)
+        #return self.do_test(cfg, model)
 
 
 @loguru_logger.catch
@@ -205,9 +218,8 @@ def main(args):
     ).run(args, cfg)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":    
     import resource
-
     # RuntimeError: received 0 items of ancdata. Issue: pytorch/pytorch#973
     rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
     hard_limit = rlimit[1]

@@ -103,7 +103,7 @@ MODEL = dict(
             MASK_ATTENTION="none",  # none | concat | mul
             ROT_TYPE="ego_rot6d",  # {allo/ego}_{quat/rot6d/log_quat/lie_vec}
             TRANS_TYPE="centroid_z",  # trans | centroid_z (SITE) | centroid_z_abs
-            Z_TYPE="REL",  # REL | ABS | LOG | NEG_LOG  (only valid for centroid_z)
+            Z_TYPE="ABS",  # REL | ABS | LOG | NEG_LOG  (only valid for centroid_z)
         ),
         LOSS_CFG=dict(
             # xyz loss ----------------------------
@@ -165,7 +165,7 @@ TEST = dict(
     SAVE_RESULTS_ONLY=False,  # turn this on to only save the predicted results
     # ransac_pnp | net_iter_pnp (learned pnp init + iter pnp) | net_ransac_pnp (net init + ransac pnp)
     # net_ransac_pnp_rot (net_init + ransanc pnp --> net t + pnp R)
-    PNP_TYPE="ransac_pnp",
+    PNP_TYPE="epropnp",
     PRECISE_BN=dict(ENABLED=False, NUM_ITER=200),
     USE_DEPTH_REFINE=False,
     DEPTH_REFINE_ITER=2,

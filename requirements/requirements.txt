@@ -17,9 +17,9 @@ tabulate
 pytest-runner
 pytest
 ipdb
+mmcv==1.7.0
 tqdm
 numba
-mmcv-full
 imagecorruptions
 pyassimp==4.1.3  # 4.1.4 will cause egl_renderer SegmentFault
 pypng

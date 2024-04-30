@@ -333,7 +333,7 @@ def get_out_mask(cfg, pred_mask):
     return out_mask
 
 
-def vis_batch(cfg, batch, phase="train"):
+def vis_batch(cfg, batch, phase="train", save_path=None):
     n_obj = batch["roi_cls"].shape[0]
     # yapf: disable
     for i in range(n_obj):
@@ -356,5 +356,5 @@ def vis_batch(cfg, batch, phase="train"):
         show_ims = list(vis_dict.values())
         ncol = 4
         nrow = int(np.ceil(len(show_ims) / ncol))
-        grid_show(show_ims, show_titles, row=nrow, col=ncol)
+        grid_show(show_ims, show_titles, row=nrow, col=ncol, save_path=save_path)
     # yapf: enable

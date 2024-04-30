@@ -3,6 +3,7 @@ import copy
 import logging
 import os.path as osp
 import pickle
+from random import sample
 
 import cv2
 import mmcv

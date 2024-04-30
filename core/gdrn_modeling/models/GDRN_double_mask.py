@@ -8,6 +8,9 @@ import torch.nn.functional as F
 from core.utils.solver_utils import build_optimizer_with_params
 from detectron2.utils.events import get_event_storage
 from mmcv.runner import load_checkpoint
+import os
+import time
+#import pyprogressivex
 
 from ..losses.coor_cross_entropy import CrossEntropyHeatmapLoss
 from ..losses.l2_loss import L2Loss
@@ -27,20 +30,27 @@ from .pose_from_pred import pose_from_pred
 from .pose_from_pred_centroid_z import pose_from_pred_centroid_z
 from .pose_from_pred_centroid_z_abs import pose_from_pred_centroid_z_abs
 from .net_factory import BACKBONES
-from core.utils.my_checkpoint import load_timm_pretrained
+#from core.utils.my_checkpoint import load_timm_pretrained
+from core.gdrn_modeling.epropnp.lib.ops.pnp.epropnp import EProPnP6DoF
+from core.gdrn_modeling.epropnp.lib.ops.pnp.camera import PerspectiveCamera
+from core.gdrn_modeling.epropnp.lib.ops.pnp.levenberg_marquardt import LMSolver, RSLMSolver
+from core.gdrn_modeling.epropnp.lib.ops.pnp.cost_fun import AdaptiveHuberPnPCost
+from core.gdrn_modeling.epropnp.lib.models.monte_carlo_pose_loss import MonteCarloPoseLoss
+from core.gdrn_modeling.epropnp.lib.ops.rotation_conversions import matrix_to_quaternion
+import cv2
+from scipy.spatial.transform import Rotation as R
 
 logger = logging.getLogger(__name__)
 
-
 class GDRN_DoubleMask(nn.Module):
-    def __init__(self, cfg, backbone, geo_head_net, neck=None, pnp_net=None):
+    def __init__(self, cfg, backbone, geo_head_net, epropnp_head=None, neck=None, pnp_net=None):
         super().__init__()
         assert cfg.MODEL.POSE_NET.NAME == "GDRN_double_mask", cfg.MODEL.POSE_NET.NAME
         self.backbone = backbone
         self.neck = neck
 
         self.geo_head_net = geo_head_net
-        self.pnp_net = pnp_net
+        self.epropnp_head = epropnp_head
 
         self.cfg = cfg
         self.xyz_out_dim, self.mask_out_dim, self.region_out_dim = get_xyz_doublemask_region_out_dim(cfg)
@@ -55,17 +65,42 @@ class GDRN_DoubleMask(nn.Module):
             self.loss_names = [
                 "mask", "coor_x", "coor_y", "coor_z", "coor_x_bin", "coor_y_bin", "coor_z_bin", "region",
                 "PM_R", "PM_xy", "PM_z", "PM_xy_noP", "PM_z_noP", "PM_T", "PM_T_noP",
-                "centroid", "z", "trans_xy", "trans_z", "trans_LPnP", "rot", "bind",
+                "centroid", "z", "trans_xy", "trans_z", "trans_LPnP", "rot", "bind", "monte_carlo",
             ]
             for loss_name in self.loss_names:
                 self.register_parameter(
                     f"log_var_{loss_name}", nn.Parameter(torch.tensor([0.0], requires_grad=True, dtype=torch.float32))
                 )
+                
+        self.mc_loss_fn = MonteCarloPoseLoss(init_norm_factor=1.0, momentum=0.01)
+    
         # yapf: enable
+        self.pnp_net_train = EProPnP6DoF(
+            mc_samples=cfg.MODEL.POSE_NET.PNP_NET.NUM_POINTS,
+            num_iter=4,
+            solver=LMSolver(
+                dof=6,
+                num_iter=5,
+                init_solver=RSLMSolver(
+                    dof=6,
+                    num_points=16,
+                    num_proposals=4,
+                    num_iter=3))).cuda()
+        
+        self.pnp_net_test = EProPnP6DoF(
+            mc_samples=cfg.MODEL.POSE_NET.PNP_NET.NUM_POINTS,
+            num_iter=4,
+            solver=LMSolver(
+                dof=6,
+                num_iter=10)).cuda()
 
     def forward(
         self,
         x,
+        resize_ratios,
+        roi_extents,
+        gt_ego_rot=None,
+        gt_trans=None,
         gt_xyz=None,
         gt_xyz_bin=None,
         gt_mask_trunc=None,
@@ -73,10 +108,8 @@ class GDRN_DoubleMask(nn.Module):
         gt_mask_obj=None,
         gt_mask_full=None,
         gt_region=None,
-        gt_ego_rot=None,
         gt_points=None,
         sym_infos=None,
-        gt_trans=None,
         gt_trans_ratio=None,
         roi_classes=None,
         roi_coord_2d=None,
@@ -84,14 +117,13 @@ class GDRN_DoubleMask(nn.Module):
         roi_cams=None,
         roi_centers=None,
         roi_whs=None,
-        roi_extents=None,
-        resize_ratios=None,
         do_loss=False,
     ):
         cfg = self.cfg
         net_cfg = cfg.MODEL.POSE_NET
         g_head_cfg = net_cfg.GEO_HEAD
         pnp_net_cfg = net_cfg.PNP_NET
+        loss_cfg = net_cfg.LOSS_CFG
 
         device = x.device
         bs = x.shape[0]
@@ -102,7 +134,7 @@ class GDRN_DoubleMask(nn.Module):
         conv_feat = self.backbone(x)  # [bs, c, 8, 8]
         if self.neck is not None:
             conv_feat = self.neck(conv_feat)
-        vis_mask, full_mask, coor_x, coor_y, coor_z, region = self.geo_head_net(conv_feat)
+        vis_mask, full_mask, coor_x, coor_y, coor_z, region, w2d, scale = self.geo_head_net(conv_feat)
 
         if g_head_cfg.XYZ_CLASS_AWARE:
             assert roi_classes is not None
@@ -135,68 +167,219 @@ class GDRN_DoubleMask(nn.Module):
             coor_feat = torch.cat([coor_x_softmax, coor_y_softmax, coor_z_softmax], dim=1)
         else:
             coor_feat = torch.cat([coor_x, coor_y, coor_z], dim=1)  # BCHW
+        
 
         if pnp_net_cfg.WITH_2D_COORD:
             if pnp_net_cfg.COORD_2D_TYPE == "rel":
                 assert roi_coord_2d_rel is not None
                 coor_feat = torch.cat([coor_feat, roi_coord_2d_rel], dim=1)
-            else:  # default abs
+            else:  # default is abs not rel
                 assert roi_coord_2d is not None
-                coor_feat = torch.cat([coor_feat, roi_coord_2d], dim=1)
+                x3d = coor_feat
+                # x2d will be calculated the same way as EPro-PnP
+                # x2d = roi_coord_2d
 
         # NOTE: for region, the 1st dim is bg
         region_softmax = F.softmax(region[:, 1:, :, :], dim=1)
 
-        mask_atten = None
-        if pnp_net_cfg.MASK_ATTENTION != "none":
-            mask_atten = get_mask_prob(vis_mask, mask_loss_type=net_cfg.LOSS_CFG.MASK_LOSS_TYPE)
+        # -----------------------------------------------
+        # https://github.com/tjiiv-cprg/EPro-PnP-v2/blob/main/EPro-PnP-6DoF_v2/lib/train.py
+        # preparing data for epropnp, x3d 
+        # scale x3d to the original size, unit is meter.
+        x3d = (x3d-0.5) * roi_extents[..., None, None]  # (bs, 3, h, w)
+        scales = net_cfg.OUTPUT_RES / resize_ratios
+        wh_begin = roi_centers.to(torch.int64) - torch.stack((scales,scales), dim=1) / 2  # (n, 2)
 
-        region_atten = None
-        if pnp_net_cfg.REGION_ATTENTION:
-            region_atten = region_softmax
+        # preparing x2d
+        x2d_list = []
+        wh_unit_list = []
+        for i in range(bs):
+            wh_unit = 1 / resize_ratios[i]
+            wh_arange_current = torch.arange(net_cfg.OUTPUT_RES, dtype=torch.float).to(device)
+            yy, xx = torch.meshgrid(wh_arange_current, wh_arange_current)
+            x2d = torch.stack((wh_begin[i, 0].to(device) + xx.to(device) * wh_unit, wh_begin[i, 1].to(device) + yy.to(device) * wh_unit), dim=-1)
+            x2d_list.append(x2d)
+            wh_unit_list.append(wh_unit)
+        x2d = torch.stack(x2d_list, dim=0)
+        wh_unit = torch.stack(wh_unit_list, dim=0)
 
-        pred_rot_, pred_t_ = self.pnp_net(
-            coor_feat, region=region_atten, extents=roi_extents, mask_attention=mask_atten
-        )
+        # shape from (bs, dim, 64, 64) to (bs, pts, dim)
+        w2d = w2d.permute(0, 2, 3, 1)
+        w2d = w2d.reshape(bs, -1, 2)
+        x3d = x3d.flatten(2).transpose(-1, -2)
+        x2d = x2d.reshape(bs, net_cfg.OUTPUT_RES**2, 2)
 
-        # convert pred_rot to rot mat -------------------------
-        rot_type = pnp_net_cfg.ROT_TYPE
-        pred_rot_m = get_rot_mat(pred_rot_, rot_type)
+        # diff. between EPro-PnP-v1 and v2
+        resize_ratios_reshape = resize_ratios.clone()
+        resize_ratios_reshape = resize_ratios_reshape.unsqueeze(1).unsqueeze(2)
+        resize_ratios_reshape = resize_ratios_reshape.expand_as(w2d)
+        scale_reshape = scale.clone()
+        scale_reshape = scale_reshape.unsqueeze(1)
+        scale_reshape = scale_reshape.expand_as(w2d)
+        w2d = w2d.softmax(dim=1) * resize_ratios_reshape * scale_reshape
 
-        # convert pred_rot_m and pred_t to ego pose -----------------------------
-        if pnp_net_cfg.TRANS_TYPE == "centroid_z":
-            pred_ego_rot, pred_trans = pose_from_pred_centroid_z(
-                pred_rot_m,
-                pred_centroids=pred_t_[:, :2],
-                pred_z_vals=pred_t_[:, 2:3],  # must be [B, 1]
-                roi_cams=roi_cams,
-                roi_centers=roi_centers,
-                resize_ratios=resize_ratios,
-                roi_whs=roi_whs,
-                eps=1e-4,
-                is_allo="allo" in rot_type,
-                z_type=pnp_net_cfg.Z_TYPE,
-                # is_train=True
-                is_train=do_loss,  # TODO: sometimes we need it to be differentiable during test
+        # sampling points
+        sample_pts = [np.random.choice(net_cfg.OUTPUT_RES**2, size=pnp_net_cfg.NUM_POINTS, replace=False) for _ in range(bs)]
+        sample_inds = x2d.new_tensor(sample_pts, dtype=torch.int64)
+        
+        if do_loss: # during the training we use the gt pose to initialize.
+            R_quats_gt = matrix_to_quaternion(gt_ego_rot)
+            T_vectors_gt = gt_trans
+            pose_init = torch.cat((T_vectors_gt, R_quats_gt), dim=-1)  # (n, 7)
+
+            x3d_sampled = x3d[torch.arange(x3d.size(0))[:, None], sample_inds]
+            x2d_sampled = x2d[torch.arange(x2d.size(0))[:, None], sample_inds]
+            w2d_sampled = w2d[torch.arange(w2d.size(0))[:, None], sample_inds]
+
+            allowed_border = 30 * wh_unit
+            camera = PerspectiveCamera(
+            cam_mats=roi_cams[0].expand(bs, -1, -1),
+            z_min=0.01,
+            lb=wh_begin - allowed_border[:, None],
+            ub=wh_begin + (net_cfg.OUTPUT_RES - 1) * wh_unit[:, None] + allowed_border[:, None]
             )
-        elif pnp_net_cfg.TRANS_TYPE == "centroid_z_abs":
-            # abs 2d obj center and abs z
-            pred_ego_rot, pred_trans = pose_from_pred_centroid_z_abs(
-                pred_rot_m,
-                pred_centroids=pred_t_[:, :2],
-                pred_z_vals=pred_t_[:, 2:3],  # must be [B, 1]
-                roi_cams=roi_cams,
-                eps=1e-4,
-                is_allo="allo" in rot_type,
-                # is_train=True
-                is_train=do_loss,  # TODO: sometimes we need it to be differentiable during test
+            cost_fun = AdaptiveHuberPnPCost(
+                relative_delta=0.1)
+            cost_fun.set_param(x2d_sampled, w2d_sampled)
+
+            _, _, pose_opt_plus, _, pose_sample_logweights, cost_tgt = self.pnp_net_train.monte_carlo_forward(
+                x3d_sampled,
+                x2d_sampled,
+                w2d_sampled,
+                camera,
+                cost_fun,
+                pose_init=pose_init.to(device),
+                force_init_solve=True,
+                with_pose_opt_plus=True)
+            
+            # monte carlo loss
+            loss_mc = self.mc_loss_fn(
+                pose_sample_logweights.to(device),
+                cost_tgt.to(device),
+                scale.detach().mean().to(device)
             )
-        elif pnp_net_cfg.TRANS_TYPE == "trans":
-            pred_ego_rot, pred_trans = pose_from_pred(
-                pred_rot_m, pred_t_, eps=1e-4, is_allo="allo" in rot_type, is_train=do_loss
-            )
+            
+            norm_factor = self.mc_loss_fn.norm_factor.item()
+            # print("norm_factor: ", norm_factor)
+
+            pred_t_, R_quats = pose_opt_plus.split([3, 4], dim=-1)  # (n, [3, 4])
+            pred_rot_ = R.from_quat(R_quats[:, [1, 2, 3, 0]].detach().cpu().numpy()).as_matrix()  # (n, 3, 3)
+            pred_rot_m = torch.tensor(pred_rot_)
+            pred_t_ = torch.tensor(pred_t_)
+
+            pred_ego_rot = pred_rot_m.float().to(device)
+            pred_trans = pred_t_.float().to(device)
+            
         else:
-            raise ValueError(f"Unknown trans type: {pnp_net_cfg.TRANS_TYPE}")
+            x2d_np = x2d.clone()
+            x2d_np = x2d_np.cpu().numpy()
+            x3d_np = x3d.clone()
+            x3d_np = x3d_np.cpu().numpy()
+            w2d = w2d * wh_unit[:, None, None]
+
+            # calculate the mask based on the w2d
+            if cfg.TEST.USE_W2D_MASK:
+                assert pnp_net_cfg.INIT_THRESHOLD is not None
+                pred_conf = w2d.mean(axis=2).squeeze()
+                pred_conf = pred_conf.cpu().detach().numpy()
+                valid_mask_list = []
+                for pred_conf_ in pred_conf:
+                    valid_mask = pred_conf_ >= np.quantile(pred_conf_, pnp_net_cfg.INIT_THRESHOLD, keepdims=True)[..., None]
+                    valid_mask_squeezed = valid_mask.squeeze()
+                    valid_mask_list.append(torch.tensor(valid_mask_squeezed))
+                valid_mask = torch.stack(valid_mask_list, dim=0)
+                roi_cams = roi_cams.cpu().numpy()
+                valid_mask = valid_mask.cpu().numpy()
+            
+            # calculate the mask based on the visible mask predicted
+            if cfg.TEST.USE_PRED_VIS_MASK:
+                valid_mask_list = []
+                for i in range(vis_mask.shape[0]):
+                    vis_mask_1d = vis_mask[i].reshape(-1)
+                    vis_mask_bool = vis_mask_1d > 0.5
+                    valid_mask_list.append(torch.tensor(vis_mask_bool))
+                valid_mask = torch.stack(valid_mask_list, dim=0)
+                roi_cams = roi_cams.cpu().numpy()
+                valid_mask = valid_mask.cpu().numpy()
+
+            dist_coeffs = np.zeros((4, 1), dtype=np.float64)
+            x2d_filtered = []
+            x3d_filtered = []
+            w2d_filtered = []
+            R_quats = []
+            T_vectors = []
+            w2d = w2d / wh_unit[:, None, None]
+            for x2d_np_, x3d_np_, w2d_, mask_np_, roi_cams_ in zip(x2d_np, x3d_np, w2d, valid_mask, roi_cams):
+                _, R_vector, T_vector, _ = cv2.solvePnPRansac(
+                    x3d_np_[mask_np_], x2d_np_[mask_np_], roi_cams_, dist_coeffs)
+                q = R.from_rotvec(R_vector.reshape(-1)).as_quat()[[3, 0, 1, 2]]
+                R_quats.append(q)
+                T_vectors.append(T_vector.reshape(-1))
+            
+            # Progressive-X
+            # https://github.com/suyz526/ZebraPose/blob/06b53d2aab1f5e08ffc927b6c5a02e9913cb13f8/zebrapose/binary_code_helper/CNN_output_to_pose.py
+            # for x2d_np_, x3d_np_, w2d_, mask_np_, roi_cams_ in zip(x2d_np, x3d_np, w2d, valid_mask, roi_cams):
+            #     coord_2d = np.ascontiguousarray(x2d_np_[mask_np_].astype(np.float64))
+            #     coord_3d = np.ascontiguousarray(x3d_np_[mask_np_].astype(np.float64))
+            #     intrinsic_matrix = np.ascontiguousarray(roi_cams_.astype(np.float64))
+
+            #     pose_ests, label = pyprogressivex.find6DPoses(
+            #         x1y1=coord_2d,
+            #         x2y2z2=coord_3d,
+            #         K=intrinsic_matrix,
+            #         threshold=2,
+            #         neighborhood_ball_radius=20,
+            #         spatial_coherence_weight=0.1,
+            #         maximum_tanimoto_similarity=0.9,
+            #         max_iters=400,
+            #         minimum_point_number=6,
+            #         maximum_model_number=1
+            #     )
+
+            #     if pose_ests.shape[0] != 0:
+            #         rot = pose_ests[0:3, :3]
+            #         tvecs = pose_ests[0:3, 3].reshape(-1)
+            #         q = R.from_matrix(rot).as_quat()[[3, 0, 1, 2]]  # 转换为四元数
+            #         R_quats.append(q)
+            #         T_vectors.append(tvecs)
+            #     else:
+            #         rot = np.zeros((3,3))
+            #         tvecs = np.zeros((3,1))
+            #         success = False
+            #         continue
+
+            pose_init_test = torch.cat((torch.tensor(T_vectors), torch.tensor(R_quats)), dim=-1).float().to(device)  # (n, 7)
+
+            camera = PerspectiveCamera(
+            cam_mats=torch.tensor(roi_cams[0]).to(device),
+            z_min=0.01,
+            )
+
+            cost_fun = AdaptiveHuberPnPCost(
+                relative_delta=0.1)
+        
+            pose_opt_list = []
+
+            cost_fun.set_param(x2d, w2d)
+            single_pose_opt, _, _, _, _, _ = self.pnp_net_test.monte_carlo_forward(
+                x3d,
+                x2d,
+                w2d,
+                camera,
+                cost_fun,
+                pose_init=pose_init_test,
+                force_init_solve=False,
+                with_pose_opt_plus=False
+            )
+            pose_opt_list.append(single_pose_opt)
+            pose_opt = torch.cat(pose_opt_list, dim=0)
+            pred_t_, R_quats = pose_opt.split([3, 4], dim=-1)  # (n, [3, 4])
+            pred_rot_ = R.from_quat(R_quats[:, [1, 2, 3, 0]].detach().cpu().numpy()).as_matrix()  # (n, 3, 3)
+            pred_rot_m = torch.tensor(pred_rot_)
+            pred_t_ = torch.tensor(pred_t_)
+
+            pred_ego_rot = pred_rot_m.float().to(device)
+            pred_trans = pred_t_.float().to(device)
 
         if not do_loss:  # test
             out_dict = {"rot": pred_ego_rot, "trans": pred_trans}
@@ -204,12 +387,20 @@ class GDRN_DoubleMask(nn.Module):
                 # TODO: move the pnp/ransac inside forward
                 out_dict.update(
                     {
+                        "x": x,
                         "mask": vis_mask,
                         "full_mask": full_mask,
                         "coor_x": coor_x,
                         "coor_y": coor_y,
                         "coor_z": coor_z,
-                        "region": region,
+                        "region": region_softmax,
+                        "w2d": w2d,
+                        "x3d": x3d,
+                        "x2d": x2d,
+                        "conf_mask": valid_mask,
+                        "x2d_filtered": x2d_filtered,
+                        "x3d_filtered": x3d_filtered,
+                        "w2d_filtered": w2d_filtered,
                     }
                 )
         else:
@@ -266,9 +457,8 @@ class GDRN_DoubleMask(nn.Module):
                 gt_points=gt_points,
                 sym_infos=sym_infos,
                 extents=roi_extents,
-                # roi_classes=roi_classes,
+                loss_mc = loss_mc,
             )
-
             if net_cfg.USE_MTL:
                 for _name in self.loss_names:
                     if f"loss_{_name}" in loss_dict:
@@ -300,6 +490,7 @@ class GDRN_DoubleMask(nn.Module):
         gt_xyz_bin,
         out_region,
         gt_region,
+        loss_mc,
         out_rot=None,
         gt_rot=None,
         out_trans=None,
@@ -315,6 +506,8 @@ class GDRN_DoubleMask(nn.Module):
         g_head_cfg = net_cfg.GEO_HEAD
         pnp_net_cfg = net_cfg.PNP_NET
         loss_cfg = net_cfg.LOSS_CFG
+        bs = out_mask_vis.shape[0]
+        device = out_mask_vis.device
 
         loss_dict = {}
 
@@ -455,11 +648,11 @@ class GDRN_DoubleMask(nn.Module):
             ), "centroid loss is only valid for predicting centroid2d_rel_delta"
 
             if loss_cfg.CENTROID_LOSS_TYPE == "L1":
-                loss_dict["loss_centroid"] = nn.L1Loss(reduction="mean")(out_centroid, gt_trans_ratio[:, :2])
+                loss_dict["loss_centroid"] = nn.L1Loss(reduction="mean")(out_centroid, gt_trans[:, :2])
             elif loss_cfg.CENTROID_LOSS_TYPE == "L2":
-                loss_dict["loss_centroid"] = L2Loss(reduction="mean")(out_centroid, gt_trans_ratio[:, :2])
+                loss_dict["loss_centroid"] = L2Loss(reduction="mean")(out_centroid, gt_trans[:, :2])
             elif loss_cfg.CENTROID_LOSS_TYPE == "MSE":
-                loss_dict["loss_centroid"] = nn.MSELoss(reduction="mean")(out_centroid, gt_trans_ratio[:, :2])
+                loss_dict["loss_centroid"] = nn.MSELoss(reduction="mean")(out_centroid, gt_trans[:, :2])
             else:
                 raise ValueError(f"Unknown centroid loss type: {loss_cfg.CENTROID_LOSS_TYPE}")
             loss_dict["loss_centroid"] *= loss_cfg.CENTROID_LW
@@ -527,6 +720,11 @@ class GDRN_DoubleMask(nn.Module):
             else:
                 raise ValueError(f"Unknown bind loss (R^T@t) type: {loss_cfg.BIND_LOSS_TYPE}")
             loss_dict["loss_bind"] *= loss_cfg.BIND_LW
+        
+        # monte carlo loss
+        if loss_cfg.get("MC_LW", 0.0) > 0.0:
+            loss_dict["loss_monte_carlo"] = loss_mc
+            loss_dict["loss_monte_carlo"] *= loss_cfg.MC_LW
 
         if net_cfg.USE_MTL:
             for _k in loss_dict:
@@ -534,7 +732,6 @@ class GDRN_DoubleMask(nn.Module):
                 cur_log_var = getattr(self, _name)
                 loss_dict[_k] = loss_dict[_k] * torch.exp(-cur_log_var) + torch.log(1 + torch.exp(cur_log_var))
         return loss_dict
-
 
 def build_model_optimizer(cfg, is_test=False):
     net_cfg = cfg.MODEL.POSE_NET
@@ -566,12 +763,8 @@ def build_model_optimizer(cfg, is_test=False):
     geo_head, geo_head_params = get_geo_head(cfg)
     params_lr_list.extend(geo_head_params)
 
-    # pnp net -----------------------------------------------
-    pnp_net, pnp_net_params = get_pnp_net(cfg)
-    params_lr_list.extend(pnp_net_params)
-
     # build model
-    model = GDRN_DoubleMask(cfg, backbone, neck=neck, geo_head_net=geo_head, pnp_net=pnp_net)
+    model = GDRN_DoubleMask(cfg, backbone, neck=neck, geo_head_net=geo_head)
     if net_cfg.USE_MTL:
         params_lr_list.append(
             {

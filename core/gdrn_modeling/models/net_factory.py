@@ -36,6 +36,29 @@ from .heads.point_pnp_net import SimplePointPnPNet
 
 from .fusenets.conv_fuse_net import ConvFuseNet
 
+def create_convnextv2_base_fcmae_ft_in1k(pretrained=True, in_chans=3, features_only=True, out_indices=(3,)):
+    # Create the ConvNeXt v2 model
+    model = timm.create_model(
+        'convnextv2_base.fcmae_ft_in1k',
+        pretrained=pretrained,
+        in_chans=in_chans,
+        features_only=features_only,
+        out_indices=out_indices
+    )
+    return model
+
+def create_convnext_base_fb_in22k_ft_in1k(pretrained=True, in_chans=3, features_only=True, out_indices=(3,)):
+    # Create the ConvNeXt v2 model
+    model = timm.create_model(
+        'convnext_base.fb_in22k_ft_in1k',
+        pretrained=pretrained,
+        in_chans=in_chans,
+        features_only=features_only,
+        out_indices=out_indices
+    )
+    return model
+
+
 BACKBONES = {
     # pvnet models
     "Resnet18_8s": Resnet18_8s,
@@ -73,6 +96,10 @@ for backbone_name in [
 for backbone_name in timm.list_models(pretrained=True):
     BACKBONES[f"timm/{backbone_name}"] = my_create_timm_model  # timm.create_model
 # yapf: enable
+
+BACKBONES['convnextv2_base.fcmae_ft_in1k'] = create_convnextv2_base_fcmae_ft_in1k
+
+BACKBONES['convnext_base.fb_in22k_ft_in1k'] = create_convnext_base_fb_in22k_ft_in1k
 
 # -------------------------------------------------------------------------------
 NECKS = {"FPN": FPN}

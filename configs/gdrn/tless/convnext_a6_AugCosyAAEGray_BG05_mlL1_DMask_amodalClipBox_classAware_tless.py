@@ -32,20 +32,20 @@ INPUT = dict(
 )
 
 SOLVER = dict(
-    IMS_PER_BATCH=48,
-    TOTAL_EPOCHS=40,  # 30
+    IMS_PER_BATCH=72,
+    TOTAL_EPOCHS=40,  # 40
     LR_SCHEDULER_NAME="flat_and_anneal",
     ANNEAL_METHOD="cosine",  # "cosine"
     ANNEAL_POINT=0.72,
     OPTIMIZER_CFG=dict(_delete_=True, type="Ranger", lr=8e-4, weight_decay=0.01),
     WEIGHT_DECAY=0.0,
     WARMUP_FACTOR=0.001,
-    WARMUP_ITERS=1000,
+    WARMUP_ITERS=400,
 )
 
 DATASETS = dict(
     TRAIN=(
-        "tless_train_primesense",
+        #"tless_train_primesense",
         "tless_train_pbr",
     ),
     TEST=("tless_bop_test_primesense",),
@@ -56,11 +56,12 @@ DATASETS = dict(
 
 DATALOADER = dict(
     # Number of data loading threads
-    NUM_WORKERS=8,
+    NUM_WORKERS=48,
     FILTER_VISIB_THR=0.3,
 )
 
 MODEL = dict(
+    WEIGHTS="output/gdrn/tless/convnext_a6_AugCosyAAEGray_BG05_mlL1_DMask_amodalClipBox_classAware_tless/model_final_wo_optim.pth",
     LOAD_DETS_TEST=True,
     PIXEL_MEAN=[0.0, 0.0, 0.0],
     PIXEL_STD=[255.0, 255.0, 255.0],
@@ -73,7 +74,7 @@ MODEL = dict(
             FREEZE=False,
             PRETRAINED="timm",
             INIT_CFG=dict(
-                type="timm/convnext_base",
+                type="convnext_base.fb_in22k_ft_in1k",   # convnext_base.fb_in22k_ft_in1k | convnextv2_base.fcmae_ft_in1k
                 pretrained=True,
                 in_chans=3,
                 features_only=True,
@@ -83,6 +84,7 @@ MODEL = dict(
         ## geo head: Mask, XYZ, Region
         GEO_HEAD=dict(
             FREEZE=False,
+            LR_MULT_NEW_HEADS=1.0,
             INIT_CFG=dict(
                 type="TopDownDoubleMaskXyzRegionHead",
                 in_dim=1024,  # this is num out channels of backbone conv feature
@@ -98,6 +100,8 @@ MODEL = dict(
             WITH_2D_COORD=True,
             ROT_TYPE="allo_rot6d",
             TRANS_TYPE="centroid_z",
+            NUM_POINTS=1024, # 512 | 1024 | 2048 | 4096
+            INIT_THRESHOLD=0.90,
         ),
         LOSS_CFG=dict(
             # xyz loss ----------------------------
@@ -107,24 +111,29 @@ MODEL = dict(
             # mask loss ---------------------------
             MASK_LOSS_TYPE="L1",  # L1 | BCE | CE
             MASK_LOSS_GT="trunc",  # trunc | visib | gt
-            MASK_LW=1.0,
+            MASK_LW=0.001,
             # full mask loss ---------------------------
             FULL_MASK_LOSS_TYPE="L1",  # L1 | BCE | CE
-            FULL_MASK_LW=1.0,
+            FULL_MASK_LW=0.001,
             # region loss -------------------------
             REGION_LOSS_TYPE="CE",  # CE
             REGION_LOSS_MASK_GT="visib",  # trunc | visib | obj
-            REGION_LW=1.0,
+            REGION_LW=0.005,
             # pm loss --------------
             PM_LOSS_SYM=True,  # NOTE: sym loss
             PM_R_ONLY=True,  # only do R loss in PM
             PM_LW=1.0,
+            # rot loss ----------------------------
+            ROT_LOSS_TYPE="angular",  # angular | L2
+            ROT_LW=1.0,
             # centroid loss -------
             CENTROID_LOSS_TYPE="L1",
             CENTROID_LW=1.0,
             # z loss -----------
             Z_LOSS_TYPE="L1",
             Z_LW=1.0,
+            # monte carlo loss ------------
+            MC_LW = 0.2,
         ),
     ),
 )
@@ -134,7 +143,7 @@ VAL = dict(
     DATASET_NAME="tless",
     SCRIPT_PATH="lib/pysixd/scripts/eval_pose_results_more.py",
     TARGETS_FILENAME="test_targets_bop19.json",
-    ERROR_TYPES="mspd,mssd,vsd,ad,reS,teS",
+    ERROR_TYPES="mspd,mssd,vsd",
     RENDERER_TYPE="cpp",  # cpp, python, egl
     SPLIT="test",
     SPLIT_TYPE="",
@@ -146,4 +155,22 @@ VAL = dict(
     USE_BOP=True,  # whether to use bop toolkit
 )
 
-TEST = dict(EVAL_PERIOD=0, VIS=False, TEST_BBOX_TYPE="est")  # gt | est
+TEST = dict(
+    USE_W2D_MASK=False,
+    USE_PRED_VIS_MASK=True,
+    EVAL_PERIOD=0, 
+    VIS=False, 
+    TEST_BBOX_TYPE="est",   # gt | est
+    USE_PNP=False,  # use pnp or direct prediction
+    # ransac_pnp | net_iter_pnp (learned pnp init + iter pnp) | net_ransac_pnp (net init + ransac pnp)
+    # net_ransac_pnp_rot (net_init + ransanc pnp --> net t + pnp R)
+    PNP_TYPE="ransac_pnp",
+    SAVE_RESULTS_ONLY=False,
+    USE_DEPTH_REFINE=False,
+    DEPTH_REFINE_ITER=2,
+    DEPTH_REFINE_THRESHOLD=0.6,
+    USE_COOR_Z_REFINE=False,
+)
+
+#EXP_ID = 'convnext_a6_AugCosyAAEGray_BG05_mlL1_DMask_amodalClipBox_classAware_lmo'
+#RESUME = True
