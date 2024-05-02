@@ -1,5 +1,6 @@
-# Multi-View 6D Pose Estimation
-This repo is based on these repos: [GDRNPP](https://github.com/shanice-l/gdrnpp_bop2022) and [EPro-PnP-v2](https://github.com/tjiiv-cprg/EPro-PnP-v2/tree/main/EPro-PnP-6DoF_v2).
+# EPRO-GDR
+
+This repo includes the code to our paper "Probabilistic 6D Pose Estimation for XR Applications" and is based on these repos: [GDRNPP](https://github.com/shanice-l/gdrnpp_bop2022) and [EPro-PnP-v2](https://github.com/tjiiv-cprg/EPro-PnP-v2/tree/main/EPro-PnP-6DoF_v2).
 
 ## Path Setting
 
