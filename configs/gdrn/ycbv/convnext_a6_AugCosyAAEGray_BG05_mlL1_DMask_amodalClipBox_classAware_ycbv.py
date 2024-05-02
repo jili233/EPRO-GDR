@@ -44,7 +44,7 @@ SOLVER = dict(
 )
 
 DATASETS = dict(
-    #TRAIN=("ycbv_train_pbr",),
+    TRAIN=("ycbv_train_pbr",),
     TEST=("ycbv_bop_test",),
     DET_FILES_TEST=("datasets/BOP_DATASETS/ycbv/test/test_bboxes/yolox_x_640_ycbv_real_pbr_ycbv_bop_test.json",),
     SYM_OBJS=[
