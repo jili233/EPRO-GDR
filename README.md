@@ -26,7 +26,7 @@ datasets/
 Please download the **Base archive**, **Object models**, **PBR-BlenderProc4BOP training images** and **BOP test images** follow BOP's instruction and please note that the datasets LM and LM-O share the same train_pbr.
 
 For example, the folder `lmo` should look like:
-
+```
 lmo
 ├── camera.json
 ├── dataset_info.md
@@ -35,6 +35,7 @@ lmo
 ├── test
 ├── test_targets_bop19.json
 └── train_pbr
+```
 
 ## Requirements
 
