@@ -8,7 +8,7 @@ This repo includes the code to our paper "Probabilistic 6D Pose Estimation for X
 
 Download the 6D pose datasets from the
 [BOP website](https://bop.felk.cvut.cz/datasets/) and
-[VOC 2012](https://pjreddie.com/projects/pascal-voc-dataset-mirror/)
+[VOC 2012](http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar)
 for background images.
 Please also download the  `test_bboxes` (in the paper we used the real+pbr bounding boxes for T-Less and YCB-V and pbr for LM-O and ITODD) from
 here [OneDrive](https://mailstsinghuaeducn-my.sharepoint.com/:f:/g/personal/liuxy21_mails_tsinghua_edu_cn/Eq_2aCC0RfhNisW8ZezYtIoBGfJiRIZnFxbITuQrJ56DjA?e=hPbJz2) (password: groupji) or [BaiDuYunPan](https://pan.baidu.com/s/1FzTO4Emfu-DxYkNG40EDKw)(password: vp58).
