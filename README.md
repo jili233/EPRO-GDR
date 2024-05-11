@@ -38,9 +38,13 @@ lmo
 ```
 
 ## Requirements
-
+For Windows+WSL's host:
 ```
 docker pull jili233/gdrnpp:v14
+```
+For Linux's host:
+```
+docker pull jili233/gdrnpp:v9
 ```
 * * Run this container with `-it` and the directory of this repo should be mounted onto the container's `/home` directory.
 
